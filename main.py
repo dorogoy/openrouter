@@ -97,8 +97,8 @@ class ModelViewer:
             "meta-llama": "Meta",
             "mistralai": "Mistral",
             "cohere": "Cohere",
-            "microsoft": "MS",
-            "perplexity": "Pplx",
+            "microsoft": "Microsoft",
+            "perplexity": "Perplexity",
             "deepseek": "DeepSeek",
             "qwen": "Qwen",
         }
@@ -128,13 +128,17 @@ class ModelViewer:
             # Clean name
             raw_name = model.get("name", "-")
             name = raw_name.split("/")[-1] if "/" in raw_name else raw_name
-            name = name[:25] + "..." if len(name) > 25 else name
 
-            # Slug
+            # Slug and provider (original, not mapped)
             canonical_slug = model.get("canonical_slug", "-")
-            slug_display = self.get_clean_slug(canonical_slug)
+            if "/" in canonical_slug:
+                orig_provider = canonical_slug.split("/")[0]
+                slug_part = canonical_slug.split("/")[-1]
+                slug_display = f"{orig_provider}/{slug_part}"
+            else:
+                slug_display = canonical_slug
 
-            # Provider
+            # Provider (mapped)
             provider = self.get_provider_name(canonical_slug)
 
             # Pricing - cost per 1M tokens
@@ -232,10 +236,11 @@ class ModelViewer:
             title=f"{len(models)} OpenRouter Models",
             show_lines=False,
             header_style="bold magenta",
+            expand=True,
         )
         for col in HEADERS:
             if col == "Model":
-                table.add_column(col, style="white", no_wrap=False, max_width=55)
+                table.add_column(col, style="white", no_wrap=False)
             elif col == "Slug":
                 table.add_column(col, style="white", no_wrap=False)
             else:
