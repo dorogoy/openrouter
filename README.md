@@ -1,68 +1,67 @@
-# Script para listar y filtrar modelos de OpenRouter.ai
+# OpenRouter.ai Model Viewer
 
-Este proyecto descarga la lista de modelos públicos de OpenRouter.ai, extrae los datos principales y muestra en consola una tabla ordenada por el precio input (prompt, por 1K tokens), usando `uv` para la gestión del entorno y dependencias.
+This project fetches the list of public models from OpenRouter.ai, extracts the main data, and displays a table in the terminal sorted by input price (prompt, per 1K tokens), using `uv` for environment and dependency management.
+
+---
+
+## ⚡ Usage with `uv`
+
+With `pyproject.toml` and `uv.lock` already present, just run the script directly. `uv` will create the virtual environment and handle dependencies automatically:
+
+```bash
+uv run main.py [filter options]
+```
+
+**Example with filters:**
+
+```bash
+uv run main.py --name=gpt --min-price=0.005 --max-price=0.015
+```
 
 ---
 
+## Available filter options
 
-## ⚡ Uso correcto con `uv`
+You can filter the results table with the following optional arguments:
 
-Con los archivos `pyproject.toml` y `uv.lock` ya presentes en el proyecto, solo necesitas ejecutar el script directamente. `uv` creará el entorno virtual y gestionará las dependencias automáticamente:
-
-```bash
-uv run python main.py [opciones de filtrado]
-```
-
-**Ejemplo de uso con filtros:**
-```bash
-uv run python main.py --name=gpt --min-price=0.005 --max-price=0.015
-```
-
----
-## Opciones de filtrado disponibles
-Puedes acotar la tabla de resultados por los siguientes argumentos opcionales:
-
-
-- `--name <texto>`
-  - Filtra modelos cuyo nombre contenga el texto (insensible a mayúsculas/minúsculas).
-- `--provider <texto>`
-  - Filtra por proveedor (insensible a mayúsculas/minúsculas).
-- `--slug <texto>`
-  - Filtra por slug.
+- `--name <text>`
+  - Filter models whose name contains the text (case-insensitive).
+- `--provider <text>`
+  - Filter by provider (case-insensitive).
+- `--slug <text>`
+  - Filter by slug.
 - `--min-price <value>`
   - Minimum price (prompt, per 1K tokens).
 - `--max-price <value>`
   - Maximum price (prompt, per 1K tokens).
-- `--incluir-gratis`
-  - Incluye modelos gratuitos en la tabla (por defecto se omiten).
+- `--include-free`
+  - Include free models in the table (by default they are omitted).
 
-**Notas de ordenación y filtrado:**
-- Por defecto, los modelos se ordenan de mayor a menor precio (prompt, por 1K tokens).
-- El modelo "Auto Router" no se muestra nunca.
-- Los modelos gratuitos solo se muestran si usas `--incluir-gratis`.
+**Sorting and filtering notes:**
 
-Puedes combinar varios filtros a la vez. Por ejemplo:
+- By default, models are sorted from highest to lowest price (prompt, per 1K tokens).
+- The "Auto Router" model is never shown.
+- Free models are only shown if you use `--include-free`.
+
+You can combine several filters at once. For example:
+
 ```bash
-uv run python main.py --provider=openai --min-price=0.001 --max-price=0.01
+uv run main.py --provider=openai --min-price=0.001 --max-price=0.01
 ```
 
 ---
 
+## Notes
 
-## Notas
-- El filtrado es inclusivo y flexible: solo modelos que cumplan todos los filtros se mostrarán.
-- Los modelos sin precio explícito de prompt no aparecerán si usas filtros de precio.
-- Puedes adaptar fácilmente el script para añadir más columnas o lógica de filtrado si lo necesitas.
+- Filtering is inclusive and flexible: only models that meet all filters will be shown.
+- Models without an explicit prompt price will not appear if you use price filters.
+- You can easily adapt the script to add more columns or filtering logic if needed.
 
-### ⚡ Sobre la caché automática
+### ⚡ About the automatic cache
 
-El script utiliza una caché local automática para evitar descargar la lista de modelos en cada ejecución:
+The script uses an automatic local cache to avoid downloading the model list on every run:
 
-- La caché se almacena en el directorio temporal del sistema y se actualiza automáticamente una vez al día.
-- Si ejecutas el script varias veces en el mismo día, solo descargará los datos la primera vez.
-- Si hay un error de red, el script usará la última caché disponible (aunque esté desactualizada), mostrando un aviso.
-- No necesitas preocuparte por limpiar la caché: se gestiona sola y se sobrescribe cada día.
-
----
-
-¿Dudas? Abre una issue o pide mejoras por chat con Goose 😃
+- The cache is stored in the system's temporary directory and is automatically updated once a day.
+- If you run the script multiple times in the same day, it will only download the data the first time.
+- If there is a network error, the script will use the last available cache (even if outdated), showing a warning.
+- You don't need to worry about cleaning the cache: it is managed automatically and overwritten daily.

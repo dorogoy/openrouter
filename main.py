@@ -30,7 +30,7 @@ class ModelViewer:
         cache_file = os.path.join(cache_dir, "openrouter_models_cache.json")
         now = datetime.now()
 
-        # Intentar leer caché
+        # Try to read cache
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
@@ -41,25 +41,25 @@ class ModelViewer:
                 if now - cache_time < timedelta(days=1) and "data" in cache:
                     return {"data": cache["data"]}
             except Exception:
-                pass  # Si hay error, se fuerza recarga
+                pass  # If error, force reload
 
-        # Si no hay caché válida, descargar
+        # If no valid cache, download
         try:
             response = requests.get(API_URL, timeout=10)
             response.raise_for_status()
             data = response.json().get("data", [])
-            # Guardar en caché
+            # Save to cache
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump({"fetched_at": now.isoformat(), "data": data}, f)
             return {"data": data}
         except requests.RequestException as e:
-            # Si hay error y hay caché previa, usarla aunque esté vieja
+            # If error and previous cache exists, use it even if old
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, "r", encoding="utf-8") as f:
                         cache = json.load(f)
                     if "data" in cache:
-                        print("[WARN] Usando datos de caché antigua por error de red.")
+                        print("[WARN] Using old cache data due to network error.")
                         return {"data": cache["data"]}
                 except Exception:
                     pass
@@ -71,7 +71,7 @@ class ModelViewer:
             value = float(price)
             cost_per_million = value * 1_000_000
 
-            # Formatear según magnitud
+            # Format according to magnitude
             if cost_per_million < 0.01:
                 return f"${cost_per_million * 100:.2f}¢"
             elif cost_per_million < 1:
@@ -101,7 +101,6 @@ class ModelViewer:
             "perplexity": "Pplx",
             "deepseek": "DeepSeek",
             "qwen": "Qwen",
-            "cohere": "Cohere",
         }
 
         for key, value in provider_map.items():
@@ -115,7 +114,7 @@ class ModelViewer:
         if not slug:
             return "-"
 
-        # Mostrar solo el último segmento después de "/"
+        # Show only the last segment after "/"
         if "/" in slug:
             return slug.split("/")[-1].replace(
                 "https://openrouter.ai/api/v1/models/", ""
@@ -126,7 +125,7 @@ class ModelViewer:
     def process_model(self, model: Dict) -> Optional[Dict[str, str]]:
         """Process single model data for display"""
         try:
-            # Nombre limpio
+            # Clean name
             raw_name = model.get("name", "-")
             name = raw_name.split("/")[-1] if "/" in raw_name else raw_name
             name = name[:25] + "..." if len(name) > 25 else name
@@ -138,7 +137,7 @@ class ModelViewer:
             # Provider
             provider = self.get_provider_name(canonical_slug)
 
-            # Pricing - coste por 1M tokens
+            # Pricing - cost per 1M tokens
             pricing = model.get("pricing", {})
             input_price_1m = self.format_price_per_million(pricing.get("prompt", "0"))
             output_price_1m = self.format_price_per_million(
@@ -160,14 +159,14 @@ class ModelViewer:
         processed = []
         min_price = float(args.min_price) if getattr(args, "min_price", None) else None
         max_price = float(args.max_price) if getattr(args, "max_price", None) else None
-        incluir_gratis = getattr(args, "incluir_gratis", False)
+        include_free = getattr(args, "include_free", False)
 
         for model in models:
             data = self.process_model(model)
             if not data:
                 continue
 
-            # Omitir "Auto Router"
+            # Omit "Auto Router"
             if data["Model"].strip().lower() == "auto router":
                 continue
 
@@ -198,8 +197,8 @@ class ModelViewer:
                 except Exception:
                     price_val = None
 
-            # Excluir modelos gratuitos salvo que se indique lo contrario
-            if not incluir_gratis:
+            # Exclude free models unless specified
+            if not include_free:
                 if price_val is None or price_val == 0.0:
                     continue
 
@@ -210,13 +209,13 @@ class ModelViewer:
                 if price_val is None or price_val > max_price:
                     continue
 
-            # Añadir el valor numérico para ordenación (como string para evitar error de tipo)
+            # Add numeric value for sorting (as string to avoid type error)
             data["_price_val"] = str(price_val if price_val is not None else -1)
             processed.append(data)
 
-        # Ordenar de mayor a menor precio (input)
+        # Sort by descending price (input)
         processed.sort(key=lambda x: float(x["_price_val"]), reverse=True)
-        # Eliminar campo auxiliar antes de mostrar
+        # Remove helper field before displaying
         for d in processed:
             if "_price_val" in d:
                 del d["_price_val"]
@@ -236,7 +235,7 @@ class ModelViewer:
         )
         for col in HEADERS:
             if col == "Model":
-                table.add_column(col, style="white", no_wrap=True, max_width=55)
+                table.add_column(col, style="white", no_wrap=False, max_width=55)
             elif col == "Slug":
                 table.add_column(col, style="white", no_wrap=False)
             else:
@@ -272,17 +271,15 @@ Examples:
   %(prog)s -n gpt-4         # Filter by model name
   %(prog)s -p openai        # Filter by provider
   %(prog)s --slug llama-3   # Filter by slug
-  %(prog)s --min-precio 0.005 --max-precio 0.015  # Filter by price range (USD per 1K tokens)
+  %(prog)s --min-price 0.005 --max-price 0.015  # Filter by price range (USD per 1K tokens)
         """,
     )
 
+    parser.add_argument("-n", "--name", type=str, help="Filter by model name substring")
     parser.add_argument(
-        "-n", "--name", type=str, help="Filtra por nombre de modelo (subcadena)"
+        "-p", "--provider", type=str, help="Filter by provider substring"
     )
-    parser.add_argument(
-        "-p", "--provider", type=str, help="Filtra por proveedor (subcadena)"
-    )
-    parser.add_argument("--slug", type=str, help="Filtra por slug (subcadena)")
+    parser.add_argument("--slug", type=str, help="Filter by slug substring")
     parser.add_argument(
         "--min-price", type=str, help="Minimum price (prompt, per 1K tokens)"
     )
@@ -290,9 +287,9 @@ Examples:
         "--max-price", type=str, help="Maximum price (prompt, per 1K tokens)"
     )
     parser.add_argument(
-        "--incluir-gratis",
+        "--include-free",
         action="store_true",
-        help="Incluye modelos gratuitos en la tabla",
+        help="Include free models in the table",
     )
 
     args = parser.parse_args()
