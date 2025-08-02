@@ -6,6 +6,7 @@ OpenRouter Model Viewer - Terminal optimized with precise pricing
 import argparse
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime, timedelta
 
@@ -303,16 +304,16 @@ def prompt_for_filters(viewer):
     answers = inquirer.prompt(questions)
 
     # Map answers to argparse-like namespace
-    class Args:
-        pass
+    import types
 
-    args = Args()
-    args.provider = None if answers["provider"] == "<Any>" else answers["provider"]
-    args.name = answers["name"] or None
-    args.slug = answers["slug"] or None
-    args.min_price = answers["min_price"] or None
-    args.max_price = answers["max_price"] or None
-    args.include_free = answers["include_free"]
+    args = types.SimpleNamespace(
+        provider=None if answers["provider"] == "<Any>" else answers["provider"],
+        name=answers["name"] or None,
+        slug=answers["slug"] or None,
+        min_price=answers["min_price"] or None,
+        max_price=answers["max_price"] or None,
+        include_free=answers["include_free"],
+    )
     return args
 
 
@@ -354,8 +355,6 @@ Examples:
     )
 
     # If no CLI args, launch interactive mode
-    import sys
-
     if len(sys.argv) == 1:
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             print(
