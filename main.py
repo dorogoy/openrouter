@@ -1,4 +1,12 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#   "requests>=2.32.4",
+#   "rich>=14.1.0",
+#   "inquirer",
+# ]
+# ///
 """
 OpenRouter Model Viewer - Terminal optimized with precise pricing
 """
