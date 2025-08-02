@@ -6,10 +6,11 @@ OpenRouter Model Viewer - Terminal optimized with precise pricing
 import argparse
 import json
 import os
+import sys
 import tempfile
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
 
+import inquirer
 import requests
 from rich.console import Console
 from rich.table import Table
@@ -24,7 +25,7 @@ class ModelViewer:
     def __init__(self):
         pass
 
-    def fetch_models(self) -> Dict:
+    def fetch_models(self) -> dict:
         """Fetch latest models from OpenRouter API, using a daily cache in temp dir"""
         cache_dir = tempfile.gettempdir()
         cache_file = os.path.join(cache_dir, "openrouter_models_cache.json")
@@ -33,7 +34,7 @@ class ModelViewer:
         # Try to read cache
         if os.path.exists(cache_file):
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     cache = json.load(f)
                 cache_time = datetime.fromisoformat(
                     cache.get("fetched_at", "1970-01-01T00:00:00")
@@ -52,18 +53,18 @@ class ModelViewer:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump({"fetched_at": now.isoformat(), "data": data}, f)
             return {"data": data}
-        except requests.RequestException as e:
+        except requests.RequestException as fetch_error:
             # If error and previous cache exists, use it even if old
             if os.path.exists(cache_file):
                 try:
-                    with open(cache_file, "r", encoding="utf-8") as f:
+                    with open(cache_file, encoding="utf-8") as f:
                         cache = json.load(f)
                     if "data" in cache:
                         print("[WARN] Using old cache data due to network error.")
                         return {"data": cache["data"]}
                 except Exception:
                     pass
-            raise SystemExit(f"Error fetching models: {e}")
+            raise SystemExit(f"Error fetching models: {fetch_error}") from fetch_error
 
     def format_price_per_million(self, price: str) -> str:
         """Format price per 1M tokens with currency"""
@@ -122,7 +123,7 @@ class ModelViewer:
         else:
             return slug[:20] if len(slug) > 20 else slug
 
-    def process_model(self, model: Dict) -> Optional[Dict[str, str]]:
+    def process_model(self, model: dict) -> dict[str, str] | None:
         """Process single model data for display"""
         try:
             # Clean name
@@ -158,8 +159,13 @@ class ModelViewer:
         except (KeyError, ValueError):
             return None
 
-    def filter_models(self, models: List[Dict], args) -> List[Dict[str, str]]:
-        """Filter, process, and sort models based on criteria, omitting 'Auto Router' and free models by default"""
+    def filter_models(self, models: list[dict], args) -> list[dict[str, str]]:
+        """
+        Filter, process, and sort models based on criteria.
+
+        Omits 'Auto Router' and free models by default, with
+        optional filtering by name, provider, slug, and price.
+        """
         processed = []
         min_price = float(args.min_price) if getattr(args, "min_price", None) else None
         max_price = float(args.max_price) if getattr(args, "max_price", None) else None
@@ -192,28 +198,27 @@ class ModelViewer:
             if price_str.startswith("$"):
                 try:
                     # Remove $ and ¢, handle cents
-                    if "¢" in price_str:
-                        price_val = (
-                            float(price_str.replace("$", "").replace("¢", "")) / 100
-                        )
-                    else:
-                        price_val = float(price_str.replace("$", ""))
+                    price_val = (
+                        float(price_str.replace("$", "").replace("¢", "")) / 100
+                        if "¢" in price_str
+                        else float(price_str.replace("$", ""))
+                    )
                 except Exception:
                     price_val = None
 
-            # Exclude free models unless specified
-            if not include_free:
-                if price_val is None or price_val == 0.0:
-                    continue
+            # Exclude free models and apply price range unless overridden
+            is_free = price_val is None or price_val == 0.0
+            if not include_free and is_free:
+                continue
 
-            if min_price is not None:
-                if price_val is None or price_val < min_price:
-                    continue
-            if max_price is not None:
-                if price_val is None or price_val > max_price:
-                    continue
+            # Filter by minimum and maximum price
+            if not is_free and (
+                (min_price is not None and price_val < min_price)
+                or (max_price is not None and price_val > max_price)
+            ):
+                continue
 
-            # Add numeric value for sorting (as string to avoid type error)
+            # Add numeric value for sorting
             data["_price_val"] = str(price_val if price_val is not None else -1)
             processed.append(data)
 
@@ -225,7 +230,7 @@ class ModelViewer:
                 del d["_price_val"]
         return processed
 
-    def display_table(self, models: List[Dict[str, str]]) -> None:
+    def display_table(self, models: list[dict[str, str]]) -> None:
         """Display models in optimized terminal table using rich"""
         console = Console()
         if not models:
@@ -239,9 +244,7 @@ class ModelViewer:
             expand=True,
         )
         for col in HEADERS:
-            if col == "Model":
-                table.add_column(col, style="white", no_wrap=False)
-            elif col == "Slug":
+            if col == "Model" or col == "Slug":
                 table.add_column(col, style="white", no_wrap=False)
             else:
                 table.add_column(col, style="white", no_wrap=True)
@@ -251,9 +254,7 @@ class ModelViewer:
 
         console.print(table)
         date_str = datetime.now().strftime("%H:%M")
-        console.print(
-            f"\n[green]💰 Prices shown per 1 million tokens | Updated: {date_str}[/green]"
-        )
+        console.print(f"[green]💰 Prices per mln tokens | Updated: {date_str}[/green]")
 
     def run(self, args):
         """Main execution flow"""
@@ -266,6 +267,56 @@ class ModelViewer:
         self.display_table(filtered_models)
 
 
+def prompt_for_filters(viewer):
+    # Fetch models to get provider options
+    data = viewer.fetch_models()
+    models = data.get("data", [])
+    providers = sorted(
+        {
+            viewer.get_provider_name(m.get("canonical_slug", ""))
+            for m in models
+            if m.get("canonical_slug")
+        }
+    )
+    providers = [p for p in providers if p and p != "-"]
+
+    questions = [
+        inquirer.List(
+            "provider",
+            message="Select provider (or skip)",
+            choices=["<Any>"] + providers,
+            default="<Any>",
+        ),
+        inquirer.Text("name", message="Model name contains (optional)", default=""),
+        inquirer.Text("slug", message="Slug contains (optional)", default=""),
+        inquirer.Text(
+            "min_price",
+            message="Minimum price (USD per 1K tokens, optional)",
+            default="",
+        ),
+        inquirer.Text(
+            "max_price",
+            message="Maximum price (USD per 1K tokens, optional)",
+            default="",
+        ),
+        inquirer.Confirm("include_free", message="Include free models?", default=False),
+    ]
+    answers = inquirer.prompt(questions)
+
+    # Map answers to argparse-like namespace
+    import types
+
+    args = types.SimpleNamespace(
+        provider=None if answers["provider"] == "<Any>" else answers["provider"],
+        name=answers["name"] or None,
+        slug=answers["slug"] or None,
+        min_price=answers["min_price"] or None,
+        max_price=answers["max_price"] or None,
+        include_free=answers["include_free"],
+    )
+    return args
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="View OpenRouter AI models with precise pricing",
@@ -276,7 +327,7 @@ Examples:
   %(prog)s -n gpt-4         # Filter by model name
   %(prog)s -p openai        # Filter by provider
   %(prog)s --slug llama-3   # Filter by slug
-  %(prog)s --min-price 0.005 --max-price 0.015  # Filter by price range (USD per 1K tokens)
+  %(prog)s --min 0.005 --max 0.015  # Filter by price range (USD per 1K tokens)
         """,
     )
 
@@ -286,10 +337,16 @@ Examples:
     )
     parser.add_argument("--slug", type=str, help="Filter by slug substring")
     parser.add_argument(
-        "--min-price", type=str, help="Minimum price (prompt, per 1K tokens)"
+        "--min",
+        dest="min_price",
+        type=str,
+        help="Minimum price (prompt, per 1K tokens)",
     )
     parser.add_argument(
-        "--max-price", type=str, help="Maximum price (prompt, per 1K tokens)"
+        "--max",
+        dest="max_price",
+        type=str,
+        help="Maximum price (prompt, per 1K tokens)",
     )
     parser.add_argument(
         "--include-free",
@@ -297,9 +354,21 @@ Examples:
         help="Include free models in the table",
     )
 
-    args = parser.parse_args()
-    viewer = ModelViewer()
-    viewer.run(args)
+    # If no CLI args, launch interactive mode
+    if len(sys.argv) == 1:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print(
+                "[ERROR] Interactive mode requires a real terminal (TTY)."
+                " Please run with CLI arguments or in a terminal window."
+            )
+            sys.exit(1)
+        viewer = ModelViewer()
+        args = prompt_for_filters(viewer)
+        viewer.run(args)
+    else:
+        args = parser.parse_args()
+        viewer = ModelViewer()
+        viewer.run(args)
 
 
 if __name__ == "__main__":

@@ -4,25 +4,36 @@ This project fetches the list of public models from OpenRouter.ai, extracts the 
 
 ---
 
+## 🛠️ Project Dependencies
+
+- Python 3.12+
+- `requests`
+- `rich`
+- `ruff` (for linting and formatting)
+
 ## ⚡ Usage with `uv`
 
 With `pyproject.toml` and `uv.lock` already present, just run the script directly. `uv` will create the virtual environment and handle dependencies automatically:
 
 ```bash
-uv run main.py [filter options]
+uv run main.py
 ```
 
-**Example with filters:**
+### 🖱️ Interactive Mode (Recommended)
+If you run the script with no arguments in a real terminal, you'll get an interactive menu with dropdowns and prompts for all filter options (powered by `inquirer`).
+
+### 🛠️ Command-Line Mode (Power Users)
+You can still use CLI flags for advanced filtering:
 
 ```bash
-uv run main.py --name=gpt --min-price=0.005 --max-price=0.015
+uv run main.py --name=gpt --min=0.005 --max=0.015 --provider=openai --include-free
 ```
 
 ---
 
 ## Available filter options
 
-You can filter the results table with the following optional arguments:
+You can filter the results table with the following optional arguments (CLI mode):
 
 - `--name <text>`
   - Filter models whose name contains the text (case-insensitive).
@@ -30,12 +41,14 @@ You can filter the results table with the following optional arguments:
   - Filter by provider (case-insensitive).
 - `--slug <text>`
   - Filter by slug.
-- `--min-price <value>`
+- `--min <value>`
   - Minimum price (prompt, per 1K tokens).
-- `--max-price <value>`
+- `--max <value>`
   - Maximum price (prompt, per 1K tokens).
 - `--include-free`
   - Include free models in the table (by default they are omitted).
+
+**Tip:** In interactive mode, you can select these options from dropdowns and prompts—no need to remember the flags!
 
 **Sorting and filtering notes:**
 
@@ -48,6 +61,49 @@ You can combine several filters at once. For example:
 ```bash
 uv run main.py --provider=openai --min-price=0.001 --max-price=0.01
 ```
+
+---
+
+## 🧹 Code Linting and Formatting
+
+This project uses `ruff` for linting and import sorting:
+
+### Linting
+
+To check code quality, run:
+
+```bash
+make lint
+```
+
+Or directly with `ruff`:
+
+```bash
+ruff check .
+```
+
+### Automatic Formatting
+
+To automatically fix linting issues and sort imports:
+
+```bash
+# Using Makefile (recommended)
+make format
+
+# Or using ruff directly
+ruff check --fix .
+ruff format .
+```
+
+The `make format` command will:
+- Automatically fix linting issues
+- Sort imports
+- Apply code formatting
+
+**Linting Configuration:**
+- Line length: 88 characters
+- Uses isort for import sorting
+- Checks for various code quality issues (pyflakes, pycodestyle, bugbear, etc.)
 
 ---
 
