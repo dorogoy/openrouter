@@ -4,6 +4,13 @@ This project fetches the list of public models from OpenRouter.ai, extracts the 
 
 ---
 
+## 🛠️ Project Dependencies
+
+- Python 3.12+
+- `requests`
+- `rich`
+- `ruff` (for linting and formatting)
+
 ## ⚡ Usage with `uv`
 
 With `pyproject.toml` and `uv.lock` already present, just run the script directly. `uv` will create the virtual environment and handle dependencies automatically:
@@ -48,6 +55,49 @@ You can combine several filters at once. For example:
 ```bash
 uv run main.py --provider=openai --min-price=0.001 --max-price=0.01
 ```
+
+---
+
+## 🧹 Code Linting and Formatting
+
+This project uses `ruff` for linting and import sorting:
+
+### Linting
+
+To check code quality, run:
+
+```bash
+make lint
+```
+
+Or directly with `ruff`:
+
+```bash
+ruff check .
+```
+
+### Automatic Formatting
+
+To automatically fix linting issues and sort imports:
+
+```bash
+# Using Makefile (recommended)
+make format
+
+# Or using ruff directly
+ruff check --fix .
+ruff format .
+```
+
+The `make format` command will:
+- Automatically fix linting issues
+- Sort imports
+- Apply code formatting
+
+**Linting Configuration:**
+- Line length: 88 characters
+- Uses isort for import sorting
+- Checks for various code quality issues (pyflakes, pycodestyle, bugbear, etc.)
 
 ---
 

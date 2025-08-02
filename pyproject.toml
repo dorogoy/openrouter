@@ -7,4 +7,33 @@ requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32.4",
     "rich>=14.1.0",
+    "ruff>=0.4.8",
 ]
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    "F",    # Pyflakes
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "A",    # builtins
+    "C4",   # comprehensions
+    "SIM",  # simplify
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["openrouter"]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
