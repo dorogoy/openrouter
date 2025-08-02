@@ -19,6 +19,29 @@ With `pyproject.toml` and `uv.lock` already present, just run the script directl
 uv run main.py
 ```
 
+### 🚀 Make the script executable and use as a CLI tool
+
+You can make `main.py` executable and use it as a standalone CLI tool. For example:
+
+```bash
+chmod +x main.py
+cp main.py ~/bin/openrouter
+```
+
+You may also remove the `.py` suffix for a cleaner command:
+
+```bash
+cp main.py ~/bin/openrouter
+# Or
+mv ~/bin/openrouter.py ~/bin/openrouter
+```
+
+Now you can run it directly:
+
+```bash
+~/bin/openrouter
+```
+
 ### 🖱️ Interactive Mode (Recommended)
 If you run the script with no arguments in a real terminal, you'll get an interactive menu with dropdowns and prompts for all filter options (powered by `inquirer`).
 
