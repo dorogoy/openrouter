@@ -90,9 +90,15 @@ class ModelViewer:
         except (ValueError, TypeError):
             return "-"
 
-    def parse_price_val(self, price_str: str) -> float | None:
+    @staticmethod
+    def parse_price_val(price_str: str | None) -> float | None:
         """Parse a formatted price string back to a numeric dollar value."""
-        if not price_str or not price_str.startswith("$"):
+        if not price_str:
+            return None
+        normalized = price_str.strip().lower()
+        if normalized in {"free", "-"}:
+            return 0.0
+        if not price_str.startswith("$"):
             return None
         try:
             cleaned = price_str.replace("$", "").replace("¢", "")
@@ -102,6 +108,19 @@ class ModelViewer:
             return val
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def parse_filter_value(raw_value, flag_name: str) -> float | None:
+        """Parse optional CLI/filter price into a float with clear error output."""
+        if raw_value in (None, ""):
+            return None
+        try:
+            return float(raw_value)
+        except (ValueError, TypeError) as err:
+            raise SystemExit(
+                f"Invalid value for {flag_name}: {raw_value!r}. "
+                "Expected a numeric value in USD per 1M tokens."
+            ) from err
 
     def get_provider_name(self, slug: str) -> str:
         """Extract clean provider name from canonical slug"""
@@ -192,10 +211,10 @@ class ModelViewer:
         raw_max = getattr(args, "max_price", None)
         raw_min_out = getattr(args, "min_out_price", None)
         raw_max_out = getattr(args, "max_out_price", None)
-        min_price = float(raw_min) if raw_min else None
-        max_price = float(raw_max) if raw_max else None
-        min_out_price = float(raw_min_out) if raw_min_out else None
-        max_out_price = float(raw_max_out) if raw_max_out else None
+        min_price = self.parse_filter_value(raw_min, "--min")
+        max_price = self.parse_filter_value(raw_max, "--max")
+        min_out_price = self.parse_filter_value(raw_min_out, "--min-out")
+        max_out_price = self.parse_filter_value(raw_max_out, "--max-out")
         include_free = getattr(args, "include_free", False)
 
         for model in models:
@@ -220,18 +239,11 @@ class ModelViewer:
                 continue
 
             # Apply price filters (input and output price)
-            # Apply price filters using raw numeric data (converted to per 1M tokens)
-            pricing = model.get("pricing", {})
-            try:
-                price_in = float(pricing.get("prompt", 0)) * 1_000_000
-                price_out = float(pricing.get("completion", 0)) * 1_000_000
-            except (ValueError, TypeError):
-                price_in = price_out = 0.0
+            price_in = self.parse_price_val(data["Cost/1M In"])
+            price_out = self.parse_price_val(data["Cost/1M Out"])
 
             # Exclude free models unless overridden
-            is_free = (price_in is None or price_in == 0.0) and (
-                price_out is None or price_out == 0.0
-            )
+            is_free = price_in == 0.0 and price_out == 0.0
             if not include_free and is_free:
                 continue
 
@@ -336,22 +348,22 @@ def prompt_for_filters(viewer):
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
         inquirer.Text(
             "min_price",
-            message="Min input price (USD per 1K tokens, optional)",
+            message="Min input price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Text(
             "max_price",
-            message="Max input price (USD per 1K tokens, optional)",
+            message="Max input price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Text(
             "min_out_price",
-            message="Min output price (USD per 1K tokens, optional)",
+            message="Min output price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Text(
             "max_out_price",
-            message="Max output price (USD per 1K tokens, optional)",
+            message="Max output price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Confirm("include_free", message="Include free models?", default=False),
@@ -399,13 +411,13 @@ Examples:
         "--min",
         dest="min_price",
         type=str,
-        help="Minimum price (prompt, per 1K tokens)",
+        help="Minimum price (prompt, per 1M tokens)",
     )
     parser.add_argument(
         "--max",
         dest="max_price",
         type=str,
-        help="Maximum price (prompt, per 1K tokens)",
+        help="Maximum price (prompt, per 1M tokens)",
     )
     parser.add_argument(
         "--min-out",
