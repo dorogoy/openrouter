@@ -225,6 +225,12 @@ class ModelViewer:
         )
         query = (getattr(args, "search", "") or "").lower()
 
+        # Parse price bounds once (outside the model loop)
+        min_price = self._parse_numeric(getattr(args, "min_price", None), "min")
+        max_price = self._parse_numeric(getattr(args, "max_price", None), "max")
+        min_out = self._parse_numeric(getattr(args, "min_out_price", None), "min-out")
+        max_out = self._parse_numeric(getattr(args, "max_out_price", None), "max-out")
+
         rows: list[dict[str, Any]] = []
         for model in models:
             row = self.process_model(model)
@@ -246,34 +252,27 @@ class ModelViewer:
                 if query not in row["Model"].lower() and query not in desc:
                     continue
 
-            # price filters
+            # free-model filter
             is_free = row["_price_in_val"] == 0.0 and row["_price_out_val"] == 0.0
             if not include_free and is_free:
                 continue
+
+            # price-range filters (skip free/dynamic models)
             if not is_free:
-                for attr, field in [
-                    ("min_price", "_price_in_val"),
-                    ("max_price", "_price_in_val"),
-                    ("min_out_price", "_price_out_val"),
-                    ("max_out_price", "_price_out_val"),
-                ]:
-                    val = getattr(args, attr, None)
-                    if val is not None:
-                        val = self._parse_numeric(val, attr.replace("_price", "").replace("_", "-"))
-                        if "min" in attr and row[field] < val:
-                            break
-                        if "max" in attr and row[field] > val:
-                            break
-                else:
-                    # context filter
-                    if context_min is not None and row["_ctx_raw"] < context_min:
-                        continue
-                    rows.append(row)
+                if min_price is not None and row["_price_in_val"] < min_price:
                     continue
-            else:
-                if context_min is not None and row["_ctx_raw"] < context_min:
+                if max_price is not None and row["_price_in_val"] > max_price:
                     continue
-                rows.append(row)
+                if min_out is not None and row["_price_out_val"] < min_out:
+                    continue
+                if max_out is not None and row["_price_out_val"] > max_out:
+                    continue
+
+            # context filter
+            if context_min is not None and row["_ctx_raw"] < context_min:
+                continue
+
+            rows.append(row)
 
         # sorting
         sort_col = SORT_COLUMNS.get(getattr(args, "sort_by", "price-in"), "Cost/1M In")
@@ -294,11 +293,11 @@ class ModelViewer:
 
     def display_table(
         self, rows: list[dict[str, Any]], limit: int | None = None
-    ) -> str:
-        """Render a Rich table and return the plain-text equivalent for exports."""
+    ) -> None:
+        """Render a Rich table to the terminal."""
         if not rows:
             self.console.print("[bold red]No models match your criteria.[/bold red]")
-            return ""
+            return
 
         if limit:
             rows = rows[:limit]
@@ -326,17 +325,6 @@ class ModelViewer:
         self.console.print(
             f"[green]💰 Per 1M tokens  |  {datetime.now().strftime('%H:%M')}[/green]"
         )
-
-        # Return a plain-text version for export
-        buf = StringIO()
-        plain_console = Console(file=buf, width=200, force_terminal=False)
-        plain_table = Table(show_lines=False, expand=False, title=None)
-        for col in HEADERS:
-            plain_table.add_column(col)
-        for r in rows[:limit] if limit else rows:
-            plain_table.add_row(*(str(r[c]) for c in HEADERS))
-        plain_console.print(plain_table)
-        return buf.getvalue()
 
     def export_json(self, rows: list[dict[str, Any]], limit: int | None = None) -> str:
         """Export rows as JSON."""
@@ -488,7 +476,11 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
         include_free=answers["include_free"],
         sort_by=answers["sort_by"],
         sort_dir=answers["sort_dir"],
-        limit=int(answers["limit"]) if answers["limit"] and answers["limit"].isdigit() else None,
+        limit=(
+            int(answers["limit"])
+            if answers["limit"] and answers["limit"].isdigit()
+            else None
+        ),
         output=answers["output"],
     )
 
