@@ -1,6 +1,6 @@
 # OpenRouter.ai Model Viewer
 
-This project fetches the list of public models from OpenRouter.ai, extracts the main data, and displays a table in the terminal sorted by input price (prompt, per 1K tokens), using `uv` for environment and dependency management.
+Browse, filter, sort, and export the OpenRouter AI model catalog — with precise pricing, context windows, and modality support — right from your terminal.
 
 ---
 
@@ -9,138 +9,103 @@ This project fetches the list of public models from OpenRouter.ai, extracts the 
 - Python 3.12+
 - `requests`
 - `rich`
-- `ruff` (for linting and formatting)
+- `inquirer`
+- `ruff` (linting & formatting, dev only)
 
 ## ⚡ Usage with `uv`
 
-With `pyproject.toml` and `uv.lock` already present, just run the script directly. `uv` will create the virtual environment and handle dependencies automatically:
+```bash
+uv run main.py                      # interactive mode
+uv run main.py --help               # see all CLI flags
+```
+
+### 🚀 Install as a global CLI tool
+
+```bash
+chmod +x main.py
+cp main.py ~/bin/openrouter         # drop .py for a clean command
+~/bin/openrouter
+```
+
+---
+
+## 🖱️ Interactive Mode (recommended)
+
+Run without arguments and get a guided questionnaire with dropdowns for every filter:
 
 ```bash
 uv run main.py
 ```
 
-### 🚀 Make the script executable and use as a CLI tool
+Prompts cover: provider, model name, slug, free-text search, context length, price ranges (in/out), sort column & direction, result limit, and output format (table / JSON / CSV).
 
-You can make `main.py` executable and use it as a standalone CLI tool. For example:
+## 🛠️ CLI Mode (power users)
 
 ```bash
-chmod +x main.py
-cp main.py ~/bin/openrouter
+uv run main.py -n gpt-4 --context-min 128000 --sort-by price-in --output table
 ```
 
-You may also remove the `.py` suffix for a cleaner command:
+### All CLI flags
+
+| Flag | Description |
+|---|---|
+| `-n, --name TEXT` | Filter by model name substring |
+| `-p, --provider TEXT` | Filter by provider substring |
+| `--slug TEXT` | Filter by canonical slug substring |
+| `--search TEXT` | Search in model name **and description** |
+| `--context-min N` | Minimum context window (e.g. `128000`) |
+| `--min PRICE` | Min **input** price per 1M tokens |
+| `--max PRICE` | Max **input** price per 1M tokens |
+| `--min-out PRICE` | Min **output** price per 1M tokens |
+| `--max-out PRICE` | Max **output** price per 1M tokens |
+| `--include-free` | Include free models (excluded by default) |
+| `--sort-by COL` | Sort column: `model`, `provider`, `context`, `price-in`, `price-out` |
+| `--sort-dir DIR` | Sort direction: `asc` or `desc` (default: `desc`) |
+| `--limit N` | Show only first N results |
+| `--output FMT` | Output format: `table`, `json`, or `csv` |
+
+### Examples
 
 ```bash
-cp main.py ~/bin/openrouter
-# Or
-mv ~/bin/openrouter.py ~/bin/openrouter
-```
+# Anthropic models with ≥200K context, cheapest first
+uv run main.py -p anthropic --context-min 200000 --sort-by price-in --sort-dir asc
 
-Now you can run it directly:
+# Search descriptions for "vision", export as JSON
+uv run main.py --search vision --output json
 
-```bash
-~/bin/openrouter
-```
+# Top 5 most expensive output prices as CSV
+uv run main.py --sort-by price-out --limit 5 --output csv
 
-### 🖱️ Interactive Mode (Recommended)
-If you run the script with no arguments in a real terminal, you'll get an interactive menu with dropdowns and prompts for all filter options (powered by `inquirer`).
-
-### 🛠️ Command-Line Mode (Power Users)
-You can still use CLI flags for advanced filtering:
-
-```bash
-uv run main.py --name=gpt --min=0.005 --max=0.015 --provider=openai --include-free
-```
-
----
-
-## Available filter options
-
-You can filter the results table with the following optional arguments (CLI mode):
-
-- `--name <text>`
-  - Filter models whose name contains the text (case-insensitive).
-- `--provider <text>`
-  - Filter by provider (case-insensitive).
-- `--slug <text>`
-  - Filter by slug.
-- `--min <value>`
-  - Minimum price (prompt, per 1K tokens).
-- `--max <value>`
-  - Maximum price (prompt, per 1K tokens).
-- `--include-free`
-  - Include free models in the table (by default they are omitted).
-
-**Tip:** In interactive mode, you can select these options from dropdowns and prompts—no need to remember the flags!
-
-**Sorting and filtering notes:**
-
-- By default, models are sorted from highest to lowest price (prompt, per 1K tokens).
-- The "Auto Router" model is never shown.
-- Free models are only shown if you use `--include-free`.
-
-You can combine several filters at once. For example:
-
-```bash
-uv run main.py --provider=openai --min-price=0.001 --max-price=0.01
+# Text-only models (exclude image/file)
+uv run main.py --search "text" --output table
 ```
 
 ---
 
-## 🧹 Code Linting and Formatting
+## 📊 Table Columns
 
-This project uses `ruff` for linting and import sorting:
+| Column | Description |
+|---|---|
+| **Model** | Clean model name |
+| **Provider** | Provider prefix from the canonical slug |
+| **Context** | Context window (human-readable: `200K`, `1.0M`) |
+| **Modality** | Input→output: `T`=text, `I`=image, `F`=file (e.g. `T+I→T`) |
+| **Cost/1M In** | Input (prompt) price per 1 million tokens |
+| **Cost/1M Out** | Output (completion) price per 1 million tokens |
 
-### Linting
-
-To check code quality, run:
-
-```bash
-make lint
-```
-
-Or directly with `ruff`:
-
-```bash
-ruff check .
-```
-
-### Automatic Formatting
-
-To automatically fix linting issues and sort imports:
-
-```bash
-# Using Makefile (recommended)
-make format
-
-# Or using ruff directly
-ruff check --fix .
-ruff format .
-```
-
-The `make format` command will:
-- Automatically fix linting issues
-- Sort imports
-- Apply code formatting
-
-**Linting Configuration:**
-- Line length: 88 characters
-- Uses isort for import sorting
-- Checks for various code quality issues (pyflakes, pycodestyle, bugbear, etc.)
+Prices are color-coded: 🟢 cheap &nbsp; 🟡 mid-range &nbsp; 🔴 expensive
 
 ---
 
-## Notes
+## 🧹 Lint & Format
 
-- Filtering is inclusive and flexible: only models that meet all filters will be shown.
-- Models without an explicit prompt price will not appear if you use price filters.
-- You can easily adapt the script to add more columns or filtering logic if needed.
+```bash
+make lint          # ruff check .
+make format        # ruff check --fix . && ruff format .
+```
 
-### ⚡ About the automatic cache
+---
 
-The script uses an automatic local cache to avoid downloading the model list on every run:
+## 📦 Caching
 
-- The cache is stored in the system's temporary directory and is automatically updated once a day.
-- If you run the script multiple times in the same day, it will only download the data the first time.
-- If there is a network error, the script will use the last available cache (even if outdated), showing a warning.
-- You don't need to worry about cleaning the cache: it is managed automatically and overwritten daily.
+The model list is cached in your system temp directory and refreshed once per day. On network errors the script falls back to the last cached copy.

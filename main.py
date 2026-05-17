@@ -8,38 +8,116 @@
 # ]
 # ///
 """
-OpenRouter Model Viewer - Terminal optimized with precise pricing
+OpenRouter Model Viewer — browse, filter, sort, and export AI model listings
+with precise pricing, context windows, and modality support.
 """
 
 import argparse
+import csv
 import json
 import os
 import sys
 import tempfile
 from datetime import datetime, timedelta
+from io import StringIO
+from typing import Any
 
 import inquirer
 import requests
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 API_URL = "https://openrouter.ai/api/v1/models"
-HEADERS = ["Model", "Provider", "Slug", "Cost/1M In", "Cost/1M Out"]
+HEADERS = ["Model", "Provider", "Context", "Modality", "Cost/1M In", "Cost/1M Out"]
+SORT_COLUMNS = {
+    "model": "Model",
+    "provider": "Provider",
+    "context": "Context",
+    "price-in": "Cost/1M In",
+    "price-out": "Cost/1M Out",
+}
+OUTPUT_FORMATS = ("table", "json", "csv")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _fmt_context(tokens: int | None) -> str:
+    """Human-readable context length."""
+    if not tokens:
+        return "-"
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.1f}M"
+    if tokens >= 1_000:
+        return f"{tokens // 1_000:,}K"
+    return str(tokens)
+
+
+def _fmt_modality(arch: dict | None) -> str:
+    """Short modality description: T=text, I=image, F=file."""
+    if not arch or not arch.get("input_modalities"):
+        return "-"
+    modalities = arch["input_modalities"]
+    chars = []
+    for m in modalities:
+        if m == "text":
+            chars.append("T")
+        elif m == "image":
+            chars.append("I")
+        elif m == "file":
+            chars.append("F")
+        elif m == "audio":
+            chars.append("A")
+        elif m == "video":
+            chars.append("V")
+        else:
+            if m:
+                chars.append(m[0].upper())
+    return "+".join(chars) + "→T"
+
+
+def _price_style(price_str: str) -> Text:
+    """Return a Rich Text for a price, colored by magnitude."""
+    text = Text(price_str)
+    if price_str in ("-", "Free", "dynamic"):
+        text.stylize("dim")
+        return text
+    try:
+        val = float(price_str.lstrip("$").replace("¢", ""))
+        if "¢" in price_str:
+            val /= 100
+        if val < 0.01:
+            text.stylize("green")
+        elif val < 1:
+            text.stylize("yellow")
+        else:
+            text.stylize("red")
+    except (ValueError, TypeError):
+        pass
+    return text
+
+
+# ---------------------------------------------------------------------------
+# ModelViewer
+# ---------------------------------------------------------------------------
 
 
 class ModelViewer:
-    """Optimized model viewer with precise pricing display"""
+    """OpenRouter model browser with caching, filtering, sorting, and export."""
 
     def __init__(self):
-        pass
+        self.console = Console()
+
+    # ---- data fetching ----
 
     def fetch_models(self) -> dict:
-        """Fetch latest models from OpenRouter API, using a daily cache in temp dir"""
-        cache_dir = tempfile.gettempdir()
-        cache_file = os.path.join(cache_dir, "openrouter_models_cache.json")
+        """Fetch models from OpenRouter API with a daily temp-dir cache."""
+        cache_file = os.path.join(tempfile.gettempdir(), "openrouter_models_cache.json")
         now = datetime.now()
 
-        # Try to read cache
+        # load cache if fresh
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, encoding="utf-8") as f:
@@ -50,306 +128,293 @@ class ModelViewer:
                 if now - cache_time < timedelta(days=1) and "data" in cache:
                     return {"data": cache["data"]}
             except Exception:
-                pass  # If error, force reload
+                pass
 
-        # If no valid cache, download
+        # fetch fresh data
         try:
-            response = requests.get(API_URL, timeout=10)
+            response = requests.get(API_URL, timeout=15)
             response.raise_for_status()
             data = response.json().get("data", [])
-            # Save to cache
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump({"fetched_at": now.isoformat(), "data": data}, f)
             return {"data": data}
-        except requests.RequestException as fetch_error:
-            # If error and previous cache exists, use it even if old
+        except requests.RequestException as exc:
             if os.path.exists(cache_file):
                 try:
                     with open(cache_file, encoding="utf-8") as f:
                         cache = json.load(f)
                     if "data" in cache:
-                        print("[WARN] Using old cache data due to network error.")
+                        self.console.print(
+                            "[yellow][WARN][/] Network error — using cached data."
+                        )
                         return {"data": cache["data"]}
                 except Exception:
                     pass
-            raise SystemExit(f"Error fetching models: {fetch_error}") from fetch_error
+            raise SystemExit(f"Error fetching models: {exc}") from exc
 
-    def format_price_per_million(self, price: str) -> str:
-        """Format price per 1M tokens with currency"""
+    # ---- data processing ----
+
+    @staticmethod
+    def price_per_million(raw: str | float) -> str:
+        """Convert API price-per-token to a human-friendly per‑1M‑tokens string."""
         try:
-            value = float(price)
-            cost_per_million = value * 1_000_000
-
-            # Format according to magnitude
-            if cost_per_million < 0.01:
-                return f"${cost_per_million * 100:.2f}¢"
-            elif cost_per_million < 1:
-                return f"${cost_per_million:.3f}"
-            else:
-                return f"${cost_per_million:.2f}"
+            cost = float(raw) * 1_000_000
+            if cost < 0:
+                return "dynamic"
+            if cost == 0:
+                return "Free"
+            if cost < 0.01:
+                return f"${cost * 100:.2f}¢"
+            if cost < 1:
+                return f"${cost:.3f}"
+            return f"${cost:.2f}"
         except (ValueError, TypeError):
             return "-"
 
     @staticmethod
-    def parse_price_val(price_str: str | None) -> float | None:
+    def price_val(price_str: str) -> float | None:
         """Parse a formatted price string back to a numeric dollar value."""
-        if not price_str:
-            return None
-        normalized = price_str.strip().lower()
-        if normalized in {"free", "-"}:
+        if not price_str or price_str in ("-", "Free", "dynamic"):
             return 0.0
-        if not price_str.startswith("$"):
-            return None
         try:
             cleaned = price_str.replace("$", "").replace("¢", "")
             val = float(cleaned)
-            if "¢" in price_str:
-                val /= 100
-            return val
+            return val / 100 if "¢" in price_str else val
         except (ValueError, TypeError):
             return None
 
-    @staticmethod
-    def parse_filter_value(
-        raw_value: str | float | None, flag_name: str
-    ) -> float | None:
-        """Parse optional CLI/filter price into a float with clear error output."""
-        if raw_value in (None, ""):
-            return None
+    def process_model(self, model: dict) -> dict[str, Any] | None:
+        """Extract display fields from a raw API model dict."""
         try:
-            return float(raw_value)
-        except (ValueError, TypeError) as err:
-            raise SystemExit(
-                f"Invalid value for {flag_name}: {raw_value!r}. "
-                "Expected a numeric value in USD per 1M tokens."
-            ) from err
-
-    def get_provider_name(self, slug: str) -> str:
-        """Extract clean provider name from canonical slug"""
-        if not slug:
-            return "-"
-
-        parts = slug.split("/")
-        if not parts:
-            return "-"
-
-        provider_map = {
-            "openai": "OpenAI",
-            "anthropic": "Anthropic",
-            "google": "Google",
-            "meta-llama": "Meta",
-            "mistralai": "Mistral",
-            "cohere": "Cohere",
-            "microsoft": "Microsoft",
-            "perplexity": "Perplexity",
-            "deepseek": "DeepSeek",
-            "qwen": "Qwen",
-        }
-
-        for key, value in provider_map.items():
-            if key in parts[0].lower():
-                return value
-
-        return parts[0][:12] if len(parts[0]) > 12 else parts[0]
-
-    def get_clean_slug(self, slug: str) -> str:
-        """Clean and shorten slug for display"""
-        if not slug:
-            return "-"
-
-        # Show only the last segment after "/"
-        if "/" in slug:
-            return slug.split("/")[-1].replace(
-                "https://openrouter.ai/api/v1/models/", ""
-            )
-        else:
-            return slug[:20] if len(slug) > 20 else slug
-
-    def process_model(self, model: dict) -> dict[str, str] | None:
-        """Process single model data for display"""
-        try:
-            # Clean name
             raw_name = model.get("name", "-")
             name = raw_name.split("/")[-1] if "/" in raw_name else raw_name
 
-            # Slug and provider (original, not mapped)
-            canonical_slug = model.get("canonical_slug", "-")
-            if "/" in canonical_slug:
-                orig_provider = canonical_slug.split("/")[0]
-                slug_part = canonical_slug.split("/")[-1]
-                slug_display = f"{orig_provider}/{slug_part}"
-            else:
-                slug_display = canonical_slug
+            slug = model.get("canonical_slug", "-")
+            provider = slug.split("/")[0] if "/" in slug else "-"
 
-            # Provider (mapped)
-            provider = self.get_provider_name(canonical_slug)
-
-            # Pricing - cost per 1M tokens
             pricing = model.get("pricing", {})
-            input_price_1m = self.format_price_per_million(pricing.get("prompt", "0"))
-            output_price_1m = self.format_price_per_million(
-                pricing.get("completion", "0")
+            price_in = self.price_per_million(pricing.get("prompt", "0"))
+            price_out = self.price_per_million(pricing.get("completion", "0"))
+
+            ctx = model.get("context_length") or model.get("top_provider", {}).get(
+                "context_length"
             )
 
             return {
                 "Model": name,
                 "Provider": provider,
-                "Slug": slug_display,
-                "Cost/1M In": input_price_1m,
-                "Cost/1M Out": output_price_1m,
+                "Context": _fmt_context(ctx),
+                "Modality": _fmt_modality(model.get("architecture")),
+                "Cost/1M In": price_in,
+                "Cost/1M Out": price_out,
+                # hidden helpers (not displayed)
+                "_ctx_raw": ctx or 0,
+                "_price_in_val": self.price_val(price_in) or 0.0,
+                "_price_out_val": self.price_val(price_out) or 0.0,
             }
-        except (KeyError, ValueError):
+        except Exception:
             return None
 
-    def filter_models(self, models: list[dict], args) -> list[dict[str, str]]:
-        """
-        Filter, process, and sort models based on criteria.
+    # ---- filtering & sorting ----
 
-        Omits 'Auto Router' and free models by default, with
-        optional filtering by name, provider, slug, and price.
-        """
-        processed = []
-        raw_min = getattr(args, "min_price", None)
-        raw_max = getattr(args, "max_price", None)
-        raw_min_out = getattr(args, "min_out_price", None)
-        raw_max_out = getattr(args, "max_out_price", None)
-        min_price = self.parse_filter_value(raw_min, "--min")
-        max_price = self.parse_filter_value(raw_max, "--max")
-        min_out_price = self.parse_filter_value(raw_min_out, "--min-out")
-        max_out_price = self.parse_filter_value(raw_max_out, "--max-out")
+    def filter_models(self, models: list[dict], args) -> list[dict[str, Any]]:
+        """Apply CLI / interactive filters and return processed rows."""
         include_free = getattr(args, "include_free", False)
+        context_min = self._parse_numeric(
+            getattr(args, "context_min", None), "context-min"
+        )
+        query = (getattr(args, "search", "") or "").lower()
 
+        # Parse price bounds once (outside the model loop)
+        min_price = self._parse_numeric(getattr(args, "min_price", None), "min")
+        max_price = self._parse_numeric(getattr(args, "max_price", None), "max")
+        min_out = self._parse_numeric(getattr(args, "min_out_price", None), "min-out")
+        max_out = self._parse_numeric(getattr(args, "max_out_price", None), "max-out")
+
+        rows: list[dict[str, Any]] = []
         for model in models:
-            data = self.process_model(model)
-            if not data:
+            row = self.process_model(model)
+            if not row:
+                continue
+            if row["Model"].strip().lower() == "auto router":
                 continue
 
-            # Omit "Auto Router"
-            if data["Model"].strip().lower() == "auto router":
+            # text filters
+            if args.name and args.name.lower() not in row["Model"].lower():
                 continue
-
-            # Apply text filters
-            name_checks = data["Model"].lower()
-            provider_checks = data["Provider"].lower()
-            slug_checks = data["Slug"].lower()
-
-            if args.name and args.name.lower() not in name_checks:
+            if args.provider and args.provider.lower() not in row["Provider"].lower():
                 continue
-            if args.provider and args.provider.lower() not in provider_checks:
+            slug = model.get("canonical_slug", "").lower()
+            if args.slug and args.slug.lower() not in slug:
                 continue
-            if args.slug and args.slug.lower() not in slug_checks:
-                continue
+            if query:
+                desc = (model.get("description") or "").lower()
+                if query not in row["Model"].lower() and query not in desc:
+                    continue
 
-            # Apply price filters (input and output price)
-            price_in = self.parse_price_val(data.get("Cost/1M In", "-"))
-            price_out = self.parse_price_val(data.get("Cost/1M Out", "-"))
-
-            # Exclude free models unless overridden
-            is_free = (price_in is None or price_in == 0.0) and (
-                price_out is None or price_out == 0.0
-            )
+            # free-model filter
+            is_free = row["_price_in_val"] == 0.0 and row["_price_out_val"] == 0.0
             if not include_free and is_free:
                 continue
 
-            # Filter by input price range
-            if (
-                not is_free
-                and min_price is not None
-                and (price_in is None or price_in < min_price)
-            ):
-                continue
-            if (
-                not is_free
-                and max_price is not None
-                and (price_in is None or price_in > max_price)
-            ):
-                continue
+            # price-range filters (skip free/dynamic models)
+            if not is_free:
+                if min_price is not None and row["_price_in_val"] < min_price:
+                    continue
+                if max_price is not None and row["_price_in_val"] > max_price:
+                    continue
+                if min_out is not None and row["_price_out_val"] < min_out:
+                    continue
+                if max_out is not None and row["_price_out_val"] > max_out:
+                    continue
 
-            # Filter by output price range
-            if (
-                not is_free
-                and min_out_price is not None
-                and (price_out is None or price_out < min_out_price)
-            ):
-                continue
-            if (
-                not is_free
-                and max_out_price is not None
-                and (price_out is None or price_out > max_out_price)
-            ):
+            # context filter
+            if context_min is not None and row["_ctx_raw"] < context_min:
                 continue
 
-            # Add numeric value for sorting (by input price)
-            data["_price_val"] = str(price_in if price_in is not None else -1)
-            processed.append(data)
+            rows.append(row)
 
-        # Sort by descending price (input)
-        processed.sort(key=lambda x: float(x["_price_val"]), reverse=True)
-        # Remove helper field before displaying
-        for d in processed:
-            if "_price_val" in d:
-                del d["_price_val"]
-        return processed
+        # sorting
+        sort_col = SORT_COLUMNS.get(getattr(args, "sort_by", "price-in"), "Cost/1M In")
+        reverse = getattr(args, "sort_dir", "desc") != "asc"
 
-    def display_table(self, models: list[dict[str, str]]) -> None:
-        """Display models in optimized terminal table using rich"""
-        console = Console()
-        if not models:
-            console.print("[bold red]No models found matching criteria.[/bold red]")
+        if sort_col == "Context":
+            rows.sort(key=lambda r: r["_ctx_raw"], reverse=reverse)
+        elif sort_col == "Cost/1M In":
+            rows.sort(key=lambda r: r["_price_in_val"], reverse=reverse)
+        elif sort_col == "Cost/1M Out":
+            rows.sort(key=lambda r: r["_price_out_val"], reverse=reverse)
+        else:
+            rows.sort(key=lambda r: r.get(sort_col, "").lower(), reverse=reverse)
+
+        return rows
+
+    # ---- output ----
+
+    def display_table(
+        self, rows: list[dict[str, Any]], limit: int | None = None
+    ) -> None:
+        """Render a Rich table to the terminal."""
+        if not rows:
+            self.console.print("[bold red]No models match your criteria.[/bold red]")
             return
 
+        if limit:
+            rows = rows[:limit]
+
         table = Table(
-            title=f"{len(models)} OpenRouter Models",
-            show_lines=False,
-            header_style="bold magenta",
+            title=f"{len(rows)} OpenRouter Models",
+            header_style="bold cyan",
             expand=True,
         )
         for col in HEADERS:
-            if col == "Model" or col == "Slug":
-                table.add_column(col, style="white", no_wrap=False)
-            else:
-                table.add_column(col, style="white", no_wrap=True)
+            no_wrap = col not in ("Model", "Modality")
+            table.add_column(col, style="white", no_wrap=no_wrap)
 
-        for m in models:
-            table.add_row(*(m[field] for field in HEADERS))
+        for r in rows:
+            table.add_row(
+                r["Model"],
+                r["Provider"],
+                r["Context"],
+                r["Modality"],
+                _price_style(r["Cost/1M In"]),
+                _price_style(r["Cost/1M Out"]),
+            )
 
-        console.print(table)
-        date_str = datetime.now().strftime("%H:%M")
-        console.print(f"[green]💰 Prices per mln tokens | Updated: {date_str}[/green]")
+        self.console.print(table)
+        self.console.print(
+            f"[green]💰 Per 1M tokens  |  {datetime.now().strftime('%H:%M')}[/green]"
+        )
+
+    def export_json(self, rows: list[dict[str, Any]], limit: int | None = None) -> str:
+        """Export rows as JSON."""
+        if limit:
+            rows = rows[:limit]
+        clean = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+        return json.dumps(clean, indent=2, ensure_ascii=False)
+
+    def export_csv(self, rows: list[dict[str, Any]], limit: int | None = None) -> str:
+        """Export rows as CSV."""
+        if limit:
+            rows = rows[:limit]
+        buf = StringIO()
+        writer = csv.DictWriter(
+            buf,
+            fieldnames=[h for h in HEADERS if not h.startswith("_")],
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        for r in rows:
+            writer.writerow({k: v for k, v in r.items() if not k.startswith("_")})
+        return buf.getvalue()
+
+    # ---- main entry point ----
 
     def run(self, args):
-        """Main execution flow"""
-        print("⏳ Fetching OpenRouter models...")
+        """Execute the full pipeline: fetch → filter → output."""
+        self.console.print("[dim]⏳ Fetching OpenRouter model list…[/dim]")
 
         data = self.fetch_models()
         models = data.get("data", [])
+        rows = self.filter_models(models, args)
 
-        filtered_models = self.filter_models(models, args)
-        self.display_table(filtered_models)
+        limit = getattr(args, "limit", None)
+        fmt = getattr(args, "output", "table")
+
+        if fmt == "json":
+            print(self.export_json(rows, limit))
+        elif fmt == "csv":
+            print(self.export_csv(rows, limit))
+        else:
+            self.display_table(rows, limit)
+
+    # ---- utility ----
+
+    @staticmethod
+    def _parse_numeric(raw: str | float | None, label: str) -> float | None:
+        if raw in (None, ""):
+            return None
+        try:
+            return float(raw)
+        except (ValueError, TypeError) as e:
+            raise SystemExit(
+                f"Invalid value for --{label}: {raw!r}. Expected a number."
+            ) from e
 
 
-def prompt_for_filters(viewer):
-    # Fetch models to get provider options
+# ---------------------------------------------------------------------------
+# Interactive mode
+# ---------------------------------------------------------------------------
+
+
+def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
+    """Interactive questionnaire for users who run without CLI args."""
+    import types
+
     data = viewer.fetch_models()
     models = data.get("data", [])
     providers = sorted(
-        {
-            viewer.get_provider_name(m.get("canonical_slug", ""))
-            for m in models
-            if m.get("canonical_slug")
-        }
+        {(m.get("canonical_slug", "") or "/").split("/")[0] for m in models}
     )
-    providers = [p for p in providers if p and p != "-"]
+    providers = [p for p in providers if p]
 
     questions = [
         inquirer.List(
             "provider",
-            message="Select provider (or skip)",
+            message="Provider (or skip)",
             choices=["<Any>"] + providers,
             default="<Any>",
         ),
         inquirer.Text("name", message="Model name contains (optional)", default=""),
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
+        inquirer.Text(
+            "search", message="Search description/name (optional)", default=""
+        ),
+        inquirer.Text(
+            "context_min",
+            message="Minimum context length (e.g. 128000, optional)",
+            default="",
+        ),
         inquirer.Text(
             "min_price",
             message="Min input price (USD per 1M tokens, optional)",
@@ -371,82 +436,137 @@ def prompt_for_filters(viewer):
             default="",
         ),
         inquirer.Confirm("include_free", message="Include free models?", default=False),
+        inquirer.List(
+            "sort_by",
+            message="Sort by",
+            choices=list(SORT_COLUMNS.keys()),
+            default="price-in",
+        ),
+        inquirer.List(
+            "sort_dir",
+            message="Sort direction",
+            choices=["desc", "asc"],
+            default="desc",
+        ),
+        inquirer.Text("limit", message="Max results (optional)", default=""),
+        inquirer.List(
+            "output",
+            message="Output format",
+            choices=list(OUTPUT_FORMATS),
+            default="table",
+        ),
     ]
     answers = inquirer.prompt(questions)
+    if answers is None:
+        sys.exit(0)
 
-    # Map answers to argparse-like namespace
-    import types
+    def _blank_to_none(val):
+        return None if val == "" else val
 
-    args = types.SimpleNamespace(
+    return types.SimpleNamespace(
         provider=None if answers["provider"] == "<Any>" else answers["provider"],
-        name=answers["name"] or None,
-        slug=answers["slug"] or None,
-        min_price=answers["min_price"] or None,
-        max_price=answers["max_price"] or None,
-        min_out_price=answers["min_out_price"] or None,
-        max_out_price=answers["max_out_price"] or None,
+        name=_blank_to_none(answers["name"]),
+        slug=_blank_to_none(answers["slug"]),
+        search=_blank_to_none(answers["search"]),
+        context_min=_blank_to_none(answers["context_min"]),
+        min_price=_blank_to_none(answers["min_price"]),
+        max_price=_blank_to_none(answers["max_price"]),
+        min_out_price=_blank_to_none(answers["min_out_price"]),
+        max_out_price=_blank_to_none(answers["max_out_price"]),
         include_free=answers["include_free"],
+        sort_by=answers["sort_by"],
+        sort_dir=answers["sort_dir"],
+        limit=(
+            int(answers["limit"])
+            if answers["limit"] and answers["limit"].isdigit()
+            else None
+        ),
+        output=answers["output"],
     )
-    return args
 
 
-def main():
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="View OpenRouter AI models with precise pricing",
+        description="Browse OpenRouter AI models — filter, sort, and export.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s                  # All models
-  %(prog)s -n gpt-4         # Filter by model name
-  %(prog)s -p openai        # Filter by provider
-  %(prog)s --slug llama-3   # Filter by slug
-  %(prog)s --min 0.005 --max 0.015  # Filter by input price range
-  %(prog)s --min-out 0.01 --max-out 0.03  # Filter by output price range
-  %(prog)s --min 0.005 --min-out 0.01  # Filter by both input and output price
+  %(prog)s                                     # interactive mode
+  %(prog)s -n gpt-4                            # filter by name
+  %(prog)s -p anthropic --context-min 200000   # Anthropic, ≥200K context
+  %(prog)s --search vision --sort-by price-in  # search descriptions
+  %(prog)s --min 0.01 --max 0.10 --output json # price range → JSON
+  %(prog)s --sort-by context --sort-dir asc    # smallest context first
+  %(prog)s --limit 10 --output csv             # top 10 → CSV
         """,
     )
 
-    parser.add_argument("-n", "--name", type=str, help="Filter by model name substring")
+    # filters
+    parser.add_argument("-n", "--name", help="Filter by model name (substring)")
+    parser.add_argument("-p", "--provider", help="Filter by provider (substring)")
+    parser.add_argument("--slug", help="Filter by canonical slug (substring)")
+    parser.add_argument("--search", help="Search in model name and description")
     parser.add_argument(
-        "-p", "--provider", type=str, help="Filter by provider substring"
-    )
-    parser.add_argument("--slug", type=str, help="Filter by slug substring")
-    parser.add_argument(
-        "--min",
-        dest="min_price",
-        type=str,
-        help="Minimum price (prompt, per 1M tokens)",
+        "--context-min", type=str, help="Minimum context length (e.g. 128000)"
     )
     parser.add_argument(
-        "--max",
-        dest="max_price",
-        type=str,
-        help="Maximum price (prompt, per 1M tokens)",
+        "--min", dest="min_price", type=str, help="Min input price (per 1M tokens)"
+    )
+    parser.add_argument(
+        "--max", dest="max_price", type=str, help="Max input price (per 1M tokens)"
     )
     parser.add_argument(
         "--min-out",
         dest="min_out_price",
         type=str,
-        help="Minimum output price (completion, per 1M tokens)",
+        help="Min output price (per 1M tokens)",
     )
     parser.add_argument(
         "--max-out",
         dest="max_out_price",
         type=str,
-        help="Maximum output price (completion, per 1M tokens)",
+        help="Max output price (per 1M tokens)",
     )
     parser.add_argument(
-        "--include-free",
-        action="store_true",
-        help="Include free models in the table",
+        "--include-free", action="store_true", help="Include free models"
     )
 
-    # If no CLI args, launch interactive mode
+    # sorting & display
+    parser.add_argument(
+        "--sort-by",
+        choices=list(SORT_COLUMNS.keys()),
+        default="price-in",
+        help="Column to sort by (default: price-in)",
+    )
+    parser.add_argument(
+        "--sort-dir",
+        choices=["asc", "desc"],
+        default="desc",
+        help="Sort direction (default: desc)",
+    )
+    parser.add_argument("--limit", type=int, help="Show only the first N results")
+    parser.add_argument(
+        "--output",
+        choices=list(OUTPUT_FORMATS),
+        default="table",
+        help="Output format (default: table)",
+    )
+    return parser
+
+
+def main():
+    parser = build_parser()
+
     if len(sys.argv) == 1:
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             print(
-                "[ERROR] Interactive mode requires a real terminal (TTY)."
-                " Please run with CLI arguments or in a terminal window."
+                "[ERROR] Interactive mode needs a real terminal (TTY). "
+                "Use --help for CLI options."
             )
             sys.exit(1)
         viewer = ModelViewer()
