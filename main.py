@@ -220,8 +220,13 @@ class ModelViewer:
                 continue
 
             # Apply price filters (input and output price)
-            price_in = self.parse_price_val(data["Cost/1M In"])
-            price_out = self.parse_price_val(data["Cost/1M Out"])
+            # Apply price filters using raw numeric data (converted to per 1M tokens)
+            pricing = model.get("pricing", {})
+            try:
+                price_in = float(pricing.get("prompt", 0)) * 1_000_000
+                price_out = float(pricing.get("completion", 0)) * 1_000_000
+            except (ValueError, TypeError):
+                price_in = price_out = 0.0
 
             # Exclude free models unless overridden
             is_free = (price_in is None or price_in == 0.0) and (
@@ -406,13 +411,13 @@ Examples:
         "--min-out",
         dest="min_out_price",
         type=str,
-        help="Minimum output price (completion, per 1K tokens)",
+        help="Minimum output price (completion, per 1M tokens)",
     )
     parser.add_argument(
         "--max-out",
         dest="max_out_price",
         type=str,
-        help="Maximum output price (completion, per 1K tokens)",
+        help="Maximum output price (completion, per 1M tokens)",
     )
     parser.add_argument(
         "--include-free",
