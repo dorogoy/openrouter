@@ -90,6 +90,40 @@ class ModelViewer:
         except (ValueError, TypeError):
             return "-"
 
+    @staticmethod
+    def parse_price_val(price_str: str | None) -> float | None:
+        """Parse a formatted price string back to a numeric dollar value."""
+        if not price_str:
+            return None
+        normalized = price_str.strip().lower()
+        if normalized in {"free", "-"}:
+            return 0.0
+        if not price_str.startswith("$"):
+            return None
+        try:
+            cleaned = price_str.replace("$", "").replace("¢", "")
+            val = float(cleaned)
+            if "¢" in price_str:
+                val /= 100
+            return val
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def parse_filter_value(
+        raw_value: str | float | None, flag_name: str
+    ) -> float | None:
+        """Parse optional CLI/filter price into a float with clear error output."""
+        if raw_value in (None, ""):
+            return None
+        try:
+            return float(raw_value)
+        except (ValueError, TypeError) as err:
+            raise SystemExit(
+                f"Invalid value for {flag_name}: {raw_value!r}. "
+                "Expected a numeric value in USD per 1M tokens."
+            ) from err
+
     def get_provider_name(self, slug: str) -> str:
         """Extract clean provider name from canonical slug"""
         if not slug:
@@ -175,8 +209,14 @@ class ModelViewer:
         optional filtering by name, provider, slug, and price.
         """
         processed = []
-        min_price = float(args.min_price) if getattr(args, "min_price", None) else None
-        max_price = float(args.max_price) if getattr(args, "max_price", None) else None
+        raw_min = getattr(args, "min_price", None)
+        raw_max = getattr(args, "max_price", None)
+        raw_min_out = getattr(args, "min_out_price", None)
+        raw_max_out = getattr(args, "max_out_price", None)
+        min_price = self.parse_filter_value(raw_min, "--min")
+        max_price = self.parse_filter_value(raw_max, "--max")
+        min_out_price = self.parse_filter_value(raw_min_out, "--min-out")
+        max_out_price = self.parse_filter_value(raw_max_out, "--max-out")
         include_free = getattr(args, "include_free", False)
 
         for model in models:
@@ -200,34 +240,47 @@ class ModelViewer:
             if args.slug and args.slug.lower() not in slug_checks:
                 continue
 
-            # Apply price filters (input price)
-            price_str = data["Cost/1M In"]
-            price_val = None
-            if price_str.startswith("$"):
-                try:
-                    # Remove $ and ¢, handle cents
-                    price_val = (
-                        float(price_str.replace("$", "").replace("¢", "")) / 100
-                        if "¢" in price_str
-                        else float(price_str.replace("$", ""))
-                    )
-                except Exception:
-                    price_val = None
+            # Apply price filters (input and output price)
+            price_in = self.parse_price_val(data.get("Cost/1M In", "-"))
+            price_out = self.parse_price_val(data.get("Cost/1M Out", "-"))
 
-            # Exclude free models and apply price range unless overridden
-            is_free = price_val is None or price_val == 0.0
+            # Exclude free models unless overridden
+            is_free = (price_in is None or price_in == 0.0) and (
+                price_out is None or price_out == 0.0
+            )
             if not include_free and is_free:
                 continue
 
-            # Filter by minimum and maximum price
-            if not is_free and (
-                (min_price is not None and price_val < min_price)
-                or (max_price is not None and price_val > max_price)
+            # Filter by input price range
+            if (
+                not is_free
+                and min_price is not None
+                and (price_in is None or price_in < min_price)
+            ):
+                continue
+            if (
+                not is_free
+                and max_price is not None
+                and (price_in is None or price_in > max_price)
             ):
                 continue
 
-            # Add numeric value for sorting
-            data["_price_val"] = str(price_val if price_val is not None else -1)
+            # Filter by output price range
+            if (
+                not is_free
+                and min_out_price is not None
+                and (price_out is None or price_out < min_out_price)
+            ):
+                continue
+            if (
+                not is_free
+                and max_out_price is not None
+                and (price_out is None or price_out > max_out_price)
+            ):
+                continue
+
+            # Add numeric value for sorting (by input price)
+            data["_price_val"] = str(price_in if price_in is not None else -1)
             processed.append(data)
 
         # Sort by descending price (input)
@@ -299,12 +352,22 @@ def prompt_for_filters(viewer):
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
         inquirer.Text(
             "min_price",
-            message="Minimum price (USD per 1K tokens, optional)",
+            message="Min input price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Text(
             "max_price",
-            message="Maximum price (USD per 1K tokens, optional)",
+            message="Max input price (USD per 1M tokens, optional)",
+            default="",
+        ),
+        inquirer.Text(
+            "min_out_price",
+            message="Min output price (USD per 1M tokens, optional)",
+            default="",
+        ),
+        inquirer.Text(
+            "max_out_price",
+            message="Max output price (USD per 1M tokens, optional)",
             default="",
         ),
         inquirer.Confirm("include_free", message="Include free models?", default=False),
@@ -320,6 +383,8 @@ def prompt_for_filters(viewer):
         slug=answers["slug"] or None,
         min_price=answers["min_price"] or None,
         max_price=answers["max_price"] or None,
+        min_out_price=answers["min_out_price"] or None,
+        max_out_price=answers["max_out_price"] or None,
         include_free=answers["include_free"],
     )
     return args
@@ -335,7 +400,9 @@ Examples:
   %(prog)s -n gpt-4         # Filter by model name
   %(prog)s -p openai        # Filter by provider
   %(prog)s --slug llama-3   # Filter by slug
-  %(prog)s --min 0.005 --max 0.015  # Filter by price range (USD per 1K tokens)
+  %(prog)s --min 0.005 --max 0.015  # Filter by input price range
+  %(prog)s --min-out 0.01 --max-out 0.03  # Filter by output price range
+  %(prog)s --min 0.005 --min-out 0.01  # Filter by both input and output price
         """,
     )
 
@@ -348,13 +415,25 @@ Examples:
         "--min",
         dest="min_price",
         type=str,
-        help="Minimum price (prompt, per 1K tokens)",
+        help="Minimum price (prompt, per 1M tokens)",
     )
     parser.add_argument(
         "--max",
         dest="max_price",
         type=str,
-        help="Maximum price (prompt, per 1K tokens)",
+        help="Maximum price (prompt, per 1M tokens)",
+    )
+    parser.add_argument(
+        "--min-out",
+        dest="min_out_price",
+        type=str,
+        help="Minimum output price (completion, per 1M tokens)",
+    )
+    parser.add_argument(
+        "--max-out",
+        dest="max_out_price",
+        type=str,
+        help="Maximum output price (completion, per 1M tokens)",
     )
     parser.add_argument(
         "--include-free",
