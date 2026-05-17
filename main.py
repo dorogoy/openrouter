@@ -73,7 +73,8 @@ def _fmt_modality(arch: dict | None) -> str:
         elif m == "video":
             chars.append("V")
         else:
-            chars.append(m[0].upper())
+            if m:
+                chars.append(m[0].upper())
     return "+".join(chars) + "→T"
 
 
@@ -258,7 +259,7 @@ class ModelViewer:
                 ]:
                     val = getattr(args, attr, None)
                     if val is not None:
-                        val = float(val)
+                        val = self._parse_numeric(val, attr.replace("_price", "").replace("_", "-"))
                         if "min" in attr and row[field] < val:
                             break
                         if "max" in attr and row[field] > val:
@@ -487,7 +488,7 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
         include_free=answers["include_free"],
         sort_by=answers["sort_by"],
         sort_dir=answers["sort_dir"],
-        limit=int(answers["limit"]) if answers["limit"] else None,
+        limit=int(answers["limit"]) if answers["limit"] and answers["limit"].isdigit() else None,
         output=answers["output"],
     )
 
