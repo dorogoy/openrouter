@@ -110,7 +110,9 @@ class ModelViewer:
             return None
 
     @staticmethod
-    def parse_filter_value(raw_value, flag_name: str) -> float | None:
+    def parse_filter_value(
+        raw_value: str | float | None, flag_name: str
+    ) -> float | None:
         """Parse optional CLI/filter price into a float with clear error output."""
         if raw_value in (None, ""):
             return None
