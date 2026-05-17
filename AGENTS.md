@@ -9,15 +9,16 @@ This repository is agent-ready. Follow these guidelines for coding agents:
   ```
 - **Run with CLI flags (power users):**
   ```bash
-  uv run main.py --name=gpt --min=0.005 --max=0.015 --provider=openai --include-free
+  uv run main.py -n gpt-4 --context-min 128000 --sort-by price-in
+  uv run main.py --search vision --output json --limit 10
   ```
 - **Lint:**
   ```bash
-  make lint        # or ruff check .
+  make lint        # ruff check .
   ```
 - **Format & sort imports:**
   ```bash
-  make format      # or ruff check --fix . && ruff format .
+  make format      # ruff check --fix . && ruff format .
   ```
 
 ## Code Style
