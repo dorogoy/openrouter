@@ -239,11 +239,13 @@ class ModelViewer:
                 continue
 
             # Apply price filters (input and output price)
-            price_in = self.parse_price_val(data["Cost/1M In"])
-            price_out = self.parse_price_val(data["Cost/1M Out"])
+            price_in = self.parse_price_val(data.get("Cost/1M In", "-"))
+            price_out = self.parse_price_val(data.get("Cost/1M Out", "-"))
 
             # Exclude free models unless overridden
-            is_free = price_in == 0.0 and price_out == 0.0
+            is_free = (price_in is None or price_in == 0.0) and (
+                price_out is None or price_out == 0.0
+            )
             if not include_free and is_free:
                 continue
 
