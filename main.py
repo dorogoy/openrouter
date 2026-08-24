@@ -225,6 +225,15 @@ class ModelViewer:
         )
         query = (getattr(args, "search", "") or "").lower()
 
+        # Parse provider filters once (outside the model loop)
+        providers = getattr(args, "provider", None)
+        if providers:
+            if isinstance(providers, str):
+                providers = [providers]
+            providers = [p.lower() for p in providers]
+        else:
+            providers = []
+
         # Parse price bounds once (outside the model loop)
         min_price = self._parse_numeric(getattr(args, "min_price", None), "min")
         max_price = self._parse_numeric(getattr(args, "max_price", None), "max")
@@ -242,7 +251,7 @@ class ModelViewer:
             # text filters
             if args.name and args.name.lower() not in row["Model"].lower():
                 continue
-            if args.provider and args.provider.lower() not in row["Provider"].lower():
+            if providers and not any(p in row["Provider"].lower() for p in providers):
                 continue
             slug = model.get("canonical_slug", "").lower()
             if args.slug and args.slug.lower() not in slug:
@@ -387,6 +396,63 @@ class ModelViewer:
 # ---------------------------------------------------------------------------
 
 
+SEARCH_AGAIN = "« Buscar de nuevo »"
+FINISH = "« Terminar »"
+
+
+def _prompt_providers(providers: list[str]) -> list[str]:
+    """Search-then-multiselect flow for the (long) provider list.
+
+    The user types a substring, gets a filtered checkbox list, and can
+    repeat searches while accumulating selections across iterations.
+    Returns the selected providers (empty list = no provider filter).
+    """
+    selected: list[str] = []
+    while True:
+        answers = inquirer.prompt(
+            [
+                inquirer.Text(
+                    "term",
+                    message="Buscar proveedor por nombre (vacío = listar todos)",
+                    default="",
+                )
+            ]
+        )
+        if answers is None:
+            sys.exit(0)
+        term = answers["term"].strip().lower()
+        matches = [p for p in providers if term in p.lower()]
+        if not matches:
+            print(f"Sin resultados para {term!r}, prueba con otro texto.")
+            continue
+
+        so_far = f" — elegidos: {', '.join(selected)}" if selected else ""
+        answers = inquirer.prompt(
+            [
+                inquirer.Checkbox(
+                    "picked",
+                    message=(
+                        f"Proveedores ({len(matches)} resultados{so_far}) — "
+                        "espacio=marcar, enter=confirmar"
+                    ),
+                    choices=[SEARCH_AGAIN, FINISH] + matches,
+                    carousel=True,
+                )
+            ]
+        )
+        if answers is None:
+            sys.exit(0)
+        picked = answers["picked"]
+
+        if FINISH in picked:
+            return selected
+        picked_providers = [p for p in picked if p not in (SEARCH_AGAIN, FINISH)]
+        selected.extend(p for p in picked_providers if p not in selected)
+        if SEARCH_AGAIN in picked:
+            continue
+        return selected
+
+
 def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     """Interactive questionnaire for users who run without CLI args."""
     import types
@@ -398,13 +464,9 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     )
     providers = [p for p in providers if p]
 
+    selected_providers = _prompt_providers(providers)
+
     questions = [
-        inquirer.List(
-            "provider",
-            message="Provider (or skip)",
-            choices=["<Any>"] + providers,
-            default="<Any>",
-        ),
         inquirer.Text("name", message="Model name contains (optional)", default=""),
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
         inquirer.Text(
@@ -464,7 +526,7 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
         return None if val == "" else val
 
     return types.SimpleNamespace(
-        provider=None if answers["provider"] == "<Any>" else answers["provider"],
+        provider=selected_providers or None,
         name=_blank_to_none(answers["name"]),
         slug=_blank_to_none(answers["slug"]),
         search=_blank_to_none(answers["search"]),
@@ -499,6 +561,7 @@ Examples:
   %(prog)s                                     # interactive mode
   %(prog)s -n gpt-4                            # filter by name
   %(prog)s -p anthropic --context-min 200000   # Anthropic, ≥200K context
+  %(prog)s -p anthropic -p openai              # multiple providers
   %(prog)s --search vision --sort-by price-in  # search descriptions
   %(prog)s --min 0.01 --max 0.10 --output json # price range → JSON
   %(prog)s --sort-by context --sort-dir asc    # smallest context first
@@ -508,7 +571,12 @@ Examples:
 
     # filters
     parser.add_argument("-n", "--name", help="Filter by model name (substring)")
-    parser.add_argument("-p", "--provider", help="Filter by provider (substring)")
+    parser.add_argument(
+        "-p",
+        "--provider",
+        action="append",
+        help="Filter by provider (substring, repeat for multiple)",
+    )
     parser.add_argument("--slug", help="Filter by canonical slug (substring)")
     parser.add_argument("--search", help="Search in model name and description")
     parser.add_argument(
