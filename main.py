@@ -225,6 +225,15 @@ class ModelViewer:
         )
         query = (getattr(args, "search", "") or "").lower()
 
+        # Parse provider filters once (outside the model loop)
+        providers = getattr(args, "provider", None)
+        if providers:
+            if isinstance(providers, str):
+                providers = [providers]
+            providers = [p.lower() for p in providers]
+        else:
+            providers = []
+
         # Parse price bounds once (outside the model loop)
         min_price = self._parse_numeric(getattr(args, "min_price", None), "min")
         max_price = self._parse_numeric(getattr(args, "max_price", None), "max")
@@ -242,7 +251,7 @@ class ModelViewer:
             # text filters
             if args.name and args.name.lower() not in row["Model"].lower():
                 continue
-            if args.provider and args.provider.lower() not in row["Provider"].lower():
+            if providers and not any(p in row["Provider"].lower() for p in providers):
                 continue
             slug = model.get("canonical_slug", "").lower()
             if args.slug and args.slug.lower() not in slug:
@@ -399,11 +408,10 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     providers = [p for p in providers if p]
 
     questions = [
-        inquirer.List(
+        inquirer.Checkbox(
             "provider",
-            message="Provider (or skip)",
+            message="Providers (space=toggle, enter=confirm, empty=all)",
             choices=["<Any>"] + providers,
-            default="<Any>",
         ),
         inquirer.Text("name", message="Model name contains (optional)", default=""),
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
@@ -463,8 +471,14 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     def _blank_to_none(val):
         return None if val == "" else val
 
+    selected_providers = answers["provider"] or []
+
     return types.SimpleNamespace(
-        provider=None if answers["provider"] == "<Any>" else answers["provider"],
+        provider=(
+            None
+            if not selected_providers or "<Any>" in selected_providers
+            else selected_providers
+        ),
         name=_blank_to_none(answers["name"]),
         slug=_blank_to_none(answers["slug"]),
         search=_blank_to_none(answers["search"]),
@@ -499,6 +513,7 @@ Examples:
   %(prog)s                                     # interactive mode
   %(prog)s -n gpt-4                            # filter by name
   %(prog)s -p anthropic --context-min 200000   # Anthropic, ≥200K context
+  %(prog)s -p anthropic -p openai              # multiple providers
   %(prog)s --search vision --sort-by price-in  # search descriptions
   %(prog)s --min 0.01 --max 0.10 --output json # price range → JSON
   %(prog)s --sort-by context --sort-dir asc    # smallest context first
@@ -508,7 +523,12 @@ Examples:
 
     # filters
     parser.add_argument("-n", "--name", help="Filter by model name (substring)")
-    parser.add_argument("-p", "--provider", help="Filter by provider (substring)")
+    parser.add_argument(
+        "-p",
+        "--provider",
+        action="append",
+        help="Filter by provider (substring, repeat for multiple)",
+    )
     parser.add_argument("--slug", help="Filter by canonical slug (substring)")
     parser.add_argument("--search", help="Search in model name and description")
     parser.add_argument(
