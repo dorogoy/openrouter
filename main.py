@@ -396,6 +396,63 @@ class ModelViewer:
 # ---------------------------------------------------------------------------
 
 
+SEARCH_AGAIN = "« Buscar de nuevo »"
+FINISH = "« Terminar »"
+
+
+def _prompt_providers(providers: list[str]) -> list[str]:
+    """Search-then-multiselect flow for the (long) provider list.
+
+    The user types a substring, gets a filtered checkbox list, and can
+    repeat searches while accumulating selections across iterations.
+    Returns the selected providers (empty list = no provider filter).
+    """
+    selected: list[str] = []
+    while True:
+        answers = inquirer.prompt(
+            [
+                inquirer.Text(
+                    "term",
+                    message="Buscar proveedor por nombre (vacío = listar todos)",
+                    default="",
+                )
+            ]
+        )
+        if answers is None:
+            sys.exit(0)
+        term = answers["term"].strip().lower()
+        matches = [p for p in providers if term in p.lower()]
+        if not matches:
+            print(f"Sin resultados para {term!r}, prueba con otro texto.")
+            continue
+
+        so_far = f" — elegidos: {', '.join(selected)}" if selected else ""
+        answers = inquirer.prompt(
+            [
+                inquirer.Checkbox(
+                    "picked",
+                    message=(
+                        f"Proveedores ({len(matches)} resultados{so_far}) — "
+                        "espacio=marcar, enter=confirmar"
+                    ),
+                    choices=[SEARCH_AGAIN, FINISH] + matches,
+                    carousel=True,
+                )
+            ]
+        )
+        if answers is None:
+            sys.exit(0)
+        picked = answers["picked"]
+
+        if FINISH in picked:
+            return selected
+        picked_providers = [p for p in picked if p not in (SEARCH_AGAIN, FINISH)]
+        selected.extend(p for p in picked_providers if p not in selected)
+        if SEARCH_AGAIN in picked:
+            continue
+        return selected
+
+
 def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     """Interactive questionnaire for users who run without CLI args."""
     import types
@@ -407,12 +464,9 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     )
     providers = [p for p in providers if p]
 
+    selected_providers = _prompt_providers(providers)
+
     questions = [
-        inquirer.Checkbox(
-            "provider",
-            message="Providers (space=toggle, enter=confirm, empty=all)",
-            choices=["<Any>"] + providers,
-        ),
         inquirer.Text("name", message="Model name contains (optional)", default=""),
         inquirer.Text("slug", message="Slug contains (optional)", default=""),
         inquirer.Text(
@@ -471,14 +525,8 @@ def prompt_for_filters(viewer: ModelViewer) -> argparse.Namespace:
     def _blank_to_none(val):
         return None if val == "" else val
 
-    selected_providers = answers["provider"] or []
-
     return types.SimpleNamespace(
-        provider=(
-            None
-            if not selected_providers or "<Any>" in selected_providers
-            else selected_providers
-        ),
+        provider=selected_providers or None,
         name=_blank_to_none(answers["name"]),
         slug=_blank_to_none(answers["slug"]),
         search=_blank_to_none(answers["search"]),
